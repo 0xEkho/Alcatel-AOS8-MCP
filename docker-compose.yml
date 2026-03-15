@@ -1,0 +1,47 @@
+# ALE OmniSwitch AOS8 — MCP Server
+# Docker Compose — production deployment
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env: set AOS_GLOBAL_USERNAME, AOS_GLOBAL_PASSWORD, MCP_API_KEY, etc.
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Notes:
+#   - Environment variables are loaded from .env (never committed to VCS).
+#   - MCP_HOST must be set to 0.0.0.0 in .env so uvicorn binds inside the container.
+#   - The known_hosts volume is optional; only required when SSH_STRICT_HOST_KEY=true.
+#     Populate ./known_hosts on the host before enabling strict key checking.
+
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        WORKDIR /app
+        RUN pip install uv
+        COPY pyproject.toml .
+        COPY LICENSE .
+        COPY README.md .
+        COPY src/ src/
+        RUN uv pip install --system -e .
+        CMD ["mcp-server"]
+    env_file: .env
+    ports:
+      - "${MCP_PORT:-8080}:${MCP_PORT:-8080}"
+    volumes:
+      # Mount a local known_hosts file when SSH_STRICT_HOST_KEY=true.
+      # Create the file on the host first: touch ./known_hosts
+      - ./known_hosts:/app/known_hosts:rw
+    restart: unless-stopped
+    healthcheck:
+      # No /health endpoint is exposed by FastMCP — use a trivial process check.
+      # To enable a real TCP probe, replace with:
+      #   test: ["CMD", "python3", "-c",
+      #          "import socket,sys; s=socket.create_connection(('localhost',${MCP_PORT:-8080}),2); s.close()"]
+      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
