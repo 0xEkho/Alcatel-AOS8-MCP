@@ -349,75 +349,82 @@ def main() -> None:
     async def _serve() -> None:
         """Build and run the uvicorn server for an HTTP transport.
 
-        The MCP app is served directly through the security middleware
-        (no extra Starlette wrapper) so that session handling is not
-        disrupted by ``Mount("/")`` route encapsulation.
+        The MCP app is served **directly** (no Starlette Mount wrapper)
+        to preserve FastMCP's internal session management (MCP-Session-Id).
 
-        If the ``poe_approval`` module is available, the Teams approval
-        webhook is started on a **separate port** (``MCP_PORT + 1``) to
-        keep the MCP transport clean.
+        If the ``poe_approval`` module is available, the Teams webhook is
+        served on a **separate port** (MCP_PORT + 1) to avoid interfering
+        with the MCP transport.
         """
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+
         if transport == "sse":
             mcp_app = mcp.sse_app()
         else:
             mcp_app = mcp.streamable_http_app()
 
-        secured_app = _apply_security(mcp_app)
+        # Apply API-key / IP security directly around the MCP app.
+        # No Starlette Mount — FastMCP manages its own sessions.
+        secured_mcp_app = _apply_security(mcp_app)
 
-        # --- MCP server (main) -------------------------------------------
-        mcp_config = uvicorn.Config(
-            secured_app,
-            host=mcp.settings.host,
-            port=mcp.settings.port,
-            log_level=os.getenv("LOG_LEVEL", "info").lower(),
-        )
-        mcp_server = uvicorn.Server(mcp_config)
-        logger.info(
-            "Uvicorn listening on %s:%d (transport=%s)",
-            mcp.settings.host,
-            mcp.settings.port,
-            transport,
-        )
+        mcp_port = mcp.settings.port
+        mcp_host = mcp.settings.host
+        log_lvl = os.getenv("LOG_LEVEL", "info").lower()
 
-        # --- Optional: PoE approval webhook on a separate port -----------
-        webhook_server = None
-        try:
-            from starlette.applications import Starlette
-            from starlette.routing import Route
-            from mcp_server.tools.poe_approval import webhook_approve_handler
-
-            webhook_port = mcp.settings.port + 1
-            webhook_app = Starlette(routes=[
-                Route(
-                    "/webhook/approve/{uuid}",
-                    webhook_approve_handler,
-                    methods=["GET"],
-                ),
-            ])
-            webhook_config = uvicorn.Config(
-                webhook_app,
-                host=mcp.settings.host,
-                port=webhook_port,
-                log_level=os.getenv("LOG_LEVEL", "info").lower(),
+        async def _run_mcp() -> None:
+            config = uvicorn.Config(
+                secured_mcp_app,
+                host=mcp_host,
+                port=mcp_port,
+                log_level=log_lvl,
             )
-            webhook_server = uvicorn.Server(webhook_config)
+            server = uvicorn.Server(config)
+            logger.info(
+                "Uvicorn listening on %s:%d (transport=%s)",
+                mcp_host,
+                mcp_port,
+                transport,
+            )
+            await server.serve()
+
+        async def _run_webhook() -> None:
+            try:
+                from mcp_server.tools.poe_approval import webhook_approve_handler
+            except (ImportError, AttributeError):
+                logger.warning(
+                    "poe_approval module not available — "
+                    "webhook will not be served"
+                )
+                return
+
+            webhook_app = Starlette(
+                routes=[
+                    Route(
+                        "/webhook/approve/{uuid}",
+                        webhook_approve_handler,
+                        methods=["GET"],
+                    ),
+                ],
+            )
+            webhook_port = mcp_port + 1
+            config = uvicorn.Config(
+                webhook_app,
+                host=mcp_host,
+                port=webhook_port,
+                log_level=log_lvl,
+            )
+            server = uvicorn.Server(config)
             logger.info(
                 "PoE approval webhook on %s:%d/webhook/approve/{uuid}",
-                mcp.settings.host,
+                mcp_host,
                 webhook_port,
             )
-        except (ImportError, AttributeError):
-            logger.warning(
-                "poe_approval module not available — "
-                "webhook /webhook/approve/{uuid} will not be served"
-            )
+            await server.serve()
 
-        if webhook_server:
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(mcp_server.serve)
-                tg.start_soon(webhook_server.serve)
-        else:
-            await mcp_server.serve()
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_run_mcp)
+            tg.start_soon(_run_webhook)
 
     anyio.run(_serve)
 
