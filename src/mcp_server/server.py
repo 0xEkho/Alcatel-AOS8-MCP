@@ -52,8 +52,10 @@ load_dotenv()
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
-from mcp_server.prompts.example import register_prompts  # noqa: E402
-from mcp_server.resources.example import register_resources  # noqa: E402
+# Resources and prompts are NOT registered — Open WebUI multi-MCP
+# workspaces only need tools.  Registering resources/prompts causes
+# the MCP client to make extra requests that interfere with session
+# management when multiple MCP servers are active.
 
 # ---------------------------------------------------------------------------
 # Logging — stderr ONLY, never stdout (stdout is reserved for STDIO transport)
@@ -293,7 +295,6 @@ def main() -> None:
     # • unp          — UNP port config, users, profiles, statistics
     # • port_security — port-security global, brief and per-port detail
     _TOOL_MODULES: list[tuple[str, str]] = [
-        ("mcp_server.tools.example",         "example"),
         ("mcp_server.tools.core",            "core"),
         ("mcp_server.tools.ports",           "ports"),
         ("mcp_server.tools.vlan",            "vlan"),
@@ -323,10 +324,6 @@ def main() -> None:
             logger.warning(
                 "Tool module %r not found — skipping registration", _mod_path
             )
-
-    # --- Register MCP resources and prompts ----------------------------------
-    register_resources(mcp)
-    register_prompts(mcp)
 
     transport = os.getenv("MCP_TRANSPORT", "stdio").strip().lower()
     logger.info("Starting MCP server (transport=%s) …", transport)
