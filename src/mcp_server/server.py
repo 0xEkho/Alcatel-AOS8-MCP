@@ -72,6 +72,7 @@ mcp = FastMCP(
     os.getenv("MCP_SERVER_NAME", "alcatel-aos8-mcp"),
     host=os.getenv("MCP_HOST", "127.0.0.1"),
     port=int(os.getenv("MCP_PORT", "8080")),
+    json_response=os.getenv("MCP_JSON_RESPONSE", "true").lower() in ("true", "1", "yes"),
 )
 
 
